@@ -1,0 +1,6 @@
+# macOS
+.DS_Store
+
+# keep raw data local (do not commit)
+data/raw/*
+!data/raw/.gitkeep
