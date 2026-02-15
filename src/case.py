@@ -212,12 +212,11 @@ def run() -> None:
     print("\nWROTE COMPARISON TABLE")
     print(" -", compare_path)
 
-    # ---- sanitize types for filtering (kills yellow warnings) ----
-    overestimated = compare["overestimated"].fillna(False).astype(bool)
-    sig_struct = compare["sig_struct"].fillna(False).infer_objects(copy=False).astype(bool)
-    sig_pred = compare["sig_pred"].fillna(False).infer_objects(copy=False).astype(bool)
-    overestimated = compare["overestimated"].fillna(False).infer_objects(copy=False).astype(bool)
-    dec_pred = compare["dec_pred"].fillna("").astype(str)
+    # ---- sanitize types for filtering ----
+    sig_struct = compare.get("sig_struct", False).fillna(False).infer_objects(copy=False).astype(bool)
+    sig_pred = compare.get("sig_pred", False).fillna(False).infer_objects(copy=False).astype(bool)
+    overestimated = compare.get("overestimated", False).fillna(False).infer_objects(copy=False).astype(bool)
+    dec_pred = compare.get("dec_pred", "").fillna("").astype(str)
 
     print("\n" + "=" * 100)
     print("TOP OVER-ESTIMATED FEATURES (Predictive >> Structural)")
@@ -227,6 +226,32 @@ def run() -> None:
         print("(none flagged by current heuristic)")
     else:
         print(over.to_string(index=False))
+
+    # ==================================================================================
+    # C) Segment profiling + exports  (writes results/tables/segment_profiles.csv)
+    # ==================================================================================
+    from .segment_profiler import run_segment_exports
+
+    seg_res = run_segment_exports(
+        project_root=root,
+        cfg=cfg,
+        df_clean=df_clean,
+        X_pred=X_pred,
+        pred_model=res_pred.model,
+        compare_df=compare,
+        export_lists=True,
+    )
+
+    print("\n" + "=" * 100)
+    print("SEGMENT PROFILES")
+    print("=" * 100)
+    print("WROTE:", seg_res.stats.get("segment_profiles_path"))
+    print(seg_res.segments_table.head(20).to_string(index=False))
+
+    print("\nWROTE LEAD LISTS / PLAYBOOK")
+    print(" - leads_high_priority_path =", seg_res.stats.get("leads_high_priority_path"))
+    print(" - leads_low_priority_path  =", seg_res.stats.get("leads_low_priority_path"))
+    print(" - segment_playbook_path    =", seg_res.stats.get("segment_playbook_path"))
 
     # -------------------------------------------------
     # Underestimated Features (Structural > Predictive)
@@ -276,7 +301,27 @@ def run() -> None:
         print(f" - up to {row['up_to_block']}: AUC={row['auc']:.4f}{delta_str}")
 
     # ----------------------------
-    # 8) Write processed artifacts
+    # 8) Report (Markdown + Figures)
+    # ----------------------------
+    from .report_writer import build_report
+
+    report_path, figs_dir = build_report(
+        project_root=root,
+        cfg=cfg,
+        summary={
+            "auc_struct": res.auc,
+            "auc_pred": res_pred.auc,
+        },
+    )
+
+    print("\n" + "=" * 100)
+    print("REPORT WRITTEN")
+    print("=" * 100)
+    print(" -", report_path)
+    print(" - figures:", figs_dir)
+
+    # ----------------------------
+    # 9) Write processed artifacts
     # ----------------------------
     processed_dir = root / cfg.paths.data_processed_dir
     processed_dir.mkdir(parents=True, exist_ok=True)
@@ -287,13 +332,13 @@ def run() -> None:
     if df_with_tracking is not None:
         df_with_tracking.to_csv(
             processed_dir / cfg.data.processed_with_tracking_filename,
-            index=False
+            index=False,
         )
 
     if df_no_tracking is not None:
         df_no_tracking.to_csv(
             processed_dir / cfg.data.processed_no_tracking_filename,
-            index=False
+            index=False,
         )
 
     model_path = processed_dir / cfg.data.processed_model_filename
