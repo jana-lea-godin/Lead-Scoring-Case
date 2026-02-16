@@ -1,105 +1,157 @@
-# Lead Scoring Case
+Lead Scoring Case
 
-**Which features truly explain conversion — and which are overestimated or just noise?**
+::: From predictive signals to real decision drivers ::: 
 
-This case focuses on separating *stable, decision-relevant signals* from effects that look convincing
-but do not hold up across time, segments, or validation splits.
+Not every strong predictor is a real lever.
+This case separates what predicts conversion from what actually explains and sustains it.
+Executive Focus
+Most lead-scoring systems optimize for AUC.
+This case optimizes for decision reliability.
 
-The goal is not to build the most complex model,
-but to understand **what actually matters for decisions**.
+We distinguish between:
 
----
+🔮 Predictive performance (what improves model accuracy)
+🧭 Structural truth (what remains stable, causal-plausible and decision-relevant)
 
-## Core Questions
+The goal is not to win a modeling contest.
+The goal is to identify robust levers worth acting on.
 
-- Which features explain conversion in a **robust and stable** way?
-- Which effects disappear once we test them across time or segments?
-- Are observed differences **real effects or statistical noise**?
-- Which features are worth acting on — and which should be ignored?
 
----
+::: Core Questions :::
 
-## Why This Matters
+1. Which features explain conversion in a stable and reproducible way?
+2. Which effects disappear when tested across resamples and model setups?
+3. Which signals are overestimated by predictive models?
+4. Which features are safe to scale — and which should be stopped?
 
-In many lead-scoring setups:
-- dozens of features look relevant
-- dashboards highlight point-in-time effects
-- decisions are made on unstable signals
+
+::: Why This Matters ::: 
+
+In many real-world lead scoring systems:
+    Dozens of features look “significant”
+    Dashboards highlight short-term effects
+    Teams act on unstable signals
 
 This leads to:
-- over-optimization
-- wasted budget
-- endless discussions without clear outcomes
+    Budget waste
+    Tactical over-optimization
+    Endless discussions without structural clarity
 
-This case takes a different approach:
-**robustness over complexity, decisions over metrics.**
+This project takes a different approach:
+    Robustness over complexity.
+    Decisions over metrics.
 
----
 
-## Approach
 
-The analysis follows three principles:
+::: Methodological Framework ::: 
 
-### 1. Signal vs. Noise
-Effects are tested across:
-- multiple data splits
-- different time windows
-- comparable segments
 
-Only effects that remain stable are treated as meaningful.
+The pipeline is built around three decision gates.
 
-### 2. Explanation before Prediction
-The focus is on understanding *why* conversion changes,
-not only on maximizing predictive accuracy.
 
-### 3. Decision Orientation
-Results are translated into:
-- clear recommendations
-- features to focus on
-- features to explicitly ignore
+1️⃣ Structural vs Predictive Modeling
 
----
+Two models are trained:
+    Predictive Logit
+    Maximizes performance (AUC, recall, precision)
+    Structural Logit
+    Removes process-proximity features and leakage
+    Focuses on interpretable, decision-relevant signals
 
-## Data
+This dual setup allows detection of:
+    Overestimated features (predictive strong, structural weak)
+    Underestimated features (structural strong, predictive ignored)
 
-- Public lead scoring dataset (Kaggle)
-- Raw data is stored **locally** and not committed to this repository
-- The repository focuses on analysis logic and decision-making
 
-See `data/README.md` for details on data handling and reproduction.
+2️⃣ Statistical Evidence (Gate 2)
 
----
+Effects are validated using:
+    Bootstrap confidence intervals
+    Multiple testing correction (BH-FDR)
+    q-value thresholding
 
-## Outputs
+Only effects passing statistical correction are considered further.
 
-The repository contains:
-- notebooks documenting the analysis logic
-- selected figures and tables derived from the analysis
-- no raw data
 
-Results are intentionally limited to what supports decisions.
+3️⃣ Robustness & Stability (Gate 3)
 
----
+Features must also satisfy:
+    Minimum effect size (|OR − 1|)
+    Sign stability across bootstrap samples
+    Decision consistency across setups
 
-## What This Case Is — and Is Not
+Each feature is classified as:
+    SCALE
+    INVESTIGATE
+    STOP
 
-**This case is:**
-- explanatory
-- decision-oriented
-- focused on stability and robustness
 
-**This case is not:**
-- a modeling competition
-- a feature dump
-- a dashboard exercise
 
----
+::: What Makes This Different ::: 
 
-## Key Takeaway
+This is not:
+    A Kaggle-style leaderboard exercise
+    A feature importance ranking
+    A dashboard project
 
-A feature is only useful if its effect is:
-- real
-- stable
-- actionable
+This is:
+    A robustness-first analysis
+    A structural interpretation framework
+    A decision-oriented pipeline
 
-Everything else is noise — no matter how good it looks in a single chart.
+The output is not “interesting coefficients”.
+The output is actionable prioritization.
+
+
+
+::: Data ::: 
+
+Public Kaggle Lead Scoring dataset
+Raw data stored locally (not committed)
+Repository contains:
+    Full analysis pipeline
+    Reproducible configuration
+    Automated reporting
+
+See data/README.md for reproduction details.
+
+
+
+::: Automated Outputs ::: 
+
+Running:
+    python -m src.case
+
+Generates:
+    Structural vs Predictive comparison tables
+    Overestimated & underestimated feature reports
+    Segment profiles
+    Decision evidence tables
+    Executive summary (Markdown)
+    Full structured report
+    Exportable lead lists
+
+All artifacts are written to:
+    results/
+
+
+
+::: Philosophy ::: 
+
+A feature is only valuable if it is:
+    Statistically supported
+    Stable across resamples
+    Structurally interpretable
+    Actionable in real operations
+Everything else is noise —
+no matter how good it looks in a single model.
+
+
+
+::: Final Takeaway ::: 
+
+Predictive power is easy.
+Decision reliability is hard.
+
+This case demonstrates how to build a lead scoring system
+that withstands validation, scrutiny and operational reality.

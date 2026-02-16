@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, List
 
 import numpy as np
 import pandas as pd
@@ -223,6 +223,215 @@ def _md_table(df: Optional[pd.DataFrame], n: int = 15) -> str:
     return "\n".join(lines) + "\n\n"
 
 
+def _pick_true_drivers(evidence_struct: Optional[pd.DataFrame], effects_struct: Optional[pd.DataFrame], k: int = 5) -> Optional[pd.DataFrame]:
+    """
+    Prefer Gate-3 evidence if available; fall back to Gate-2 effects.
+    Picks strongest drivers by effect size (abs_or_lift if present else abs_coef).
+    """
+    df = None
+    if evidence_struct is not None and not evidence_struct.empty:
+        df = evidence_struct.copy()
+        # If decisions exist, pick SCALE first, otherwise INVESTIGATE, otherwise strongest significant.
+        if "decision" in df.columns:
+            # Order: SCALE -> INVESTIGATE -> STOP (best first)
+            priority = {"SCALE": 0, "INVESTIGATE": 1, "STOP": 2}
+            df["_prio"] = df["decision"].astype(str).map(priority).fillna(3).astype(int)
+        else:
+            df["_prio"] = 1
+
+        if "abs_or_lift" in df.columns:
+            df["_score"] = pd.to_numeric(df["abs_or_lift"], errors="coerce")
+        elif "odds_ratio" in df.columns:
+            df["_score"] = (pd.to_numeric(df["odds_ratio"], errors="coerce") - 1.0).abs()
+        elif "abs_coef" in df.columns:
+            df["_score"] = pd.to_numeric(df["abs_coef"], errors="coerce")
+        elif "coef_logit" in df.columns:
+            df["_score"] = pd.to_numeric(df["coef_logit"], errors="coerce").abs()
+        else:
+            df["_score"] = np.nan
+
+        # Prefer significant if available (Gate 2)
+        if "significant" in df.columns:
+            sig = df["significant"].astype("boolean").fillna(False).astype(bool)
+            df["_sig"] = sig.astype(int)
+        else:
+            df["_sig"] = 0
+
+        df = df.sort_values(["_prio", "_sig", "_score"], ascending=[True, False, False])
+        cols_keep = [c for c in ["feature", "odds_ratio", "ci_low_or", "ci_high_or", "q_value", "stability_sign", "decision"] if c in df.columns]
+        out = df[cols_keep].head(k).copy()
+        return out.reset_index(drop=True)
+
+    if effects_struct is not None and not effects_struct.empty:
+        df = effects_struct.copy()
+        if "odds_ratio" in df.columns:
+            df["_score"] = (pd.to_numeric(df["odds_ratio"], errors="coerce") - 1.0).abs()
+        elif "abs_coef" in df.columns:
+            df["_score"] = pd.to_numeric(df["abs_coef"], errors="coerce")
+        elif "coef_logit" in df.columns:
+            df["_score"] = pd.to_numeric(df["coef_logit"], errors="coerce").abs()
+        else:
+            df["_score"] = np.nan
+
+        if "significant" in df.columns:
+            df["_sig"] = df["significant"].astype("boolean").fillna(False).astype(bool).astype(int)
+        else:
+            df["_sig"] = 0
+
+        df = df.sort_values(["_sig", "_score"], ascending=[False, False])
+        cols_keep = [c for c in ["feature", "odds_ratio", "ci_low_or", "ci_high_or", "q_value", "abs_coef"] if c in df.columns]
+        out = df[cols_keep].head(k).copy()
+        return out.reset_index(drop=True)
+
+    return None
+
+
+def _pick_overestimated(compare_df: Optional[pd.DataFrame], k: int = 3) -> Optional[pd.DataFrame]:
+    if compare_df is None or compare_df.empty or "overestimated" not in compare_df.columns:
+        return None
+    df = compare_df.copy()
+    mask = df["overestimated"].astype("boolean").fillna(False).astype(bool)
+    df = df.loc[mask].copy()
+    if df.empty:
+        return None
+    if "abs_gap" not in df.columns and "delta_log_or_pred_minus_struct" in df.columns:
+        df["abs_gap"] = pd.to_numeric(df["delta_log_or_pred_minus_struct"], errors="coerce").abs()
+    sort_col = "abs_gap" if "abs_gap" in df.columns else None
+    if sort_col:
+        df = df.sort_values(sort_col, ascending=False)
+    cols_keep = [c for c in ["feature", "abs_gap", "dec_struct", "dec_pred", "sig_struct", "sig_pred"] if c in df.columns]
+    return df[cols_keep].head(k).reset_index(drop=True)
+
+
+def _pick_underestimated(under_table: Optional[pd.DataFrame], compare_df: Optional[pd.DataFrame], k: int = 3) -> Optional[pd.DataFrame]:
+    if under_table is not None and not under_table.empty:
+        df = under_table.copy()
+        if "abs_gap" in df.columns:
+            df = df.sort_values("abs_gap", ascending=False)
+        cols_keep = [c for c in ["feature", "abs_gap", "dec_struct", "dec_pred", "sig_struct", "sig_pred"] if c in df.columns]
+        if cols_keep:
+            return df[cols_keep].head(k).reset_index(drop=True)
+        return df.head(k).reset_index(drop=True)
+
+    # fallback: derive from compare
+    if compare_df is None or compare_df.empty:
+        return None
+    df = compare_df.copy()
+    if "overestimated" in df.columns:
+        over = df["overestimated"].astype("boolean").fillna(False).astype(bool)
+        df = df.loc[~over].copy()
+    if "sig_struct" in df.columns:
+        sigs = df["sig_struct"].astype("boolean").fillna(False).astype(bool)
+        df = df.loc[sigs].copy()
+    if df.empty:
+        return None
+    if "abs_gap" not in df.columns and "delta_log_or_pred_minus_struct" in df.columns:
+        df["abs_gap"] = pd.to_numeric(df["delta_log_or_pred_minus_struct"], errors="coerce").abs()
+    if "abs_gap" in df.columns:
+        df = df.sort_values("abs_gap", ascending=False)
+    cols_keep = [c for c in ["feature", "abs_gap", "dec_struct", "dec_pred", "sig_struct", "sig_pred"] if c in df.columns]
+    return df[cols_keep].head(k).reset_index(drop=True)
+
+
+def _pick_segment_actions(segment_playbook: Optional[pd.DataFrame], segment_profiles: Optional[pd.DataFrame], k: int = 8) -> Optional[pd.DataFrame]:
+    df = None
+    if segment_playbook is not None and not segment_playbook.empty:
+        df = segment_playbook.copy()
+        # order: SCALE first, then INVESTIGATE, then STOP
+        prio = {"SCALE": 0, "INVESTIGATE": 1, "STOP": 2}
+        if "recommended_action" in df.columns:
+            df["_prio"] = df["recommended_action"].astype(str).map(prio).fillna(3).astype(int)
+        else:
+            df["_prio"] = 1
+        if "lift" in df.columns:
+            df["_lift"] = pd.to_numeric(df["lift"], errors="coerce")
+        else:
+            df["_lift"] = np.nan
+        df = df.sort_values(["_prio", "_lift"], ascending=[True, False])
+        cols_keep = [c for c in ["segment", "segment_type", "share", "conversion_rate", "lift", "recommended_action", "caution"] if c in df.columns]
+        return df[cols_keep].head(k).reset_index(drop=True)
+
+    if segment_profiles is not None and not segment_profiles.empty:
+        df = segment_profiles.copy()
+        if "lift" in df.columns:
+            df["_lift"] = pd.to_numeric(df["lift"], errors="coerce")
+            df = df.sort_values("_lift", ascending=False)
+        cols_keep = [c for c in ["segment", "segment_type", "share", "conversion_rate", "lift"] if c in df.columns]
+        return df[cols_keep].head(k).reset_index(drop=True)
+
+    return None
+
+
+def build_executive_summary(
+    *,
+    project_root: Path,
+    cfg: LeadScoringCaseConfig,
+    summary: Dict[str, object],
+    evidence_struct: Optional[pd.DataFrame],
+    effects_struct: Optional[pd.DataFrame],
+    compare: Optional[pd.DataFrame],
+    under_table: Optional[pd.DataFrame],
+    segment_playbook: Optional[pd.DataFrame],
+    segment_profiles: Optional[pd.DataFrame],
+) -> Tuple[Path, str]:
+    """
+    Build a 1-page, C-level markdown summary from pipeline artifacts.
+    Writes results/executive_summary.md and returns (path, markdown_text).
+    """
+    results_dir = project_root / cfg.paths.results_dir
+    _ensure_dir(results_dir)
+
+    auc_struct = summary.get("auc_struct")
+    auc_pred = summary.get("auc_pred")
+
+    true_drivers = _pick_true_drivers(evidence_struct, effects_struct, k=5)
+    over = _pick_overestimated(compare, k=3)
+    under = _pick_underestimated(under_table, compare, k=3)
+    seg = _pick_segment_actions(segment_playbook, segment_profiles, k=8)
+
+    alpha = cfg.significance.alpha
+    min_abs_lift = cfg.decision.min_abs_lift
+    min_stab = cfg.robustness.min_stability_fraction
+
+    md: List[str] = []
+    md.append("# Executive Summary – Lead Scoring Case\n\n")
+
+    md.append("## Ziel\n")
+    md.append("Conversion steigern – aber nur über **echte Hebel** (strukturell/robust), nicht über Proxy-Signale, die nur gut vorhersagen.\n\n")
+
+    md.append("## Modell-Setup (Dualität)\n")
+    md.append(f"- Predictive Logit (Performance): AUC **{_fmt_float(auc_pred, 4)}**\n")
+    md.append(f"- Structural Logit (Actionability): AUC **{_fmt_float(auc_struct, 4)}**\n")
+    md.append("\n")
+
+    md.append("## Decision Gates\n")
+    md.append(f"- Gate 2 (Evidenz): Bootstrap + BH-FDR, signifikant bei **q < {alpha}**\n")
+    md.append(f"- Gate 3 (Robustness → Entscheidung): Effektgröße **|OR−1| ≥ {min_abs_lift}** und Stabilität **stability_sign ≥ {min_stab}**\n")
+    md.append("\n")
+
+    md.append("## 5 echte Treiber (Structural Truth)\n\n")
+    md.append(_md_table(true_drivers, 5) if true_drivers is not None else "_(keine Daten)_\n\n")
+
+    md.append("## 3 überschätzte Features (Predictive >> Structural)\n\n")
+    md.append(_md_table(over, 3) if over is not None else "_(keine Daten)_\n\n")
+
+    md.append("## 3 unterschätzte Features (Structural >> Predictive)\n\n")
+    md.append(_md_table(under, 3) if under is not None else "_(keine Daten)_\n\n")
+
+    md.append("## Segment Playbook (Focus & Routing)\n\n")
+    md.append(_md_table(seg, 8) if seg is not None else "_(keine Daten)_\n\n")
+
+    md.append("## Empfohlene Aktionen (kurz)\n")
+    md.append("- **Scale:** ICP/High-Intent Sources + Top Score Segmente (p80/p90/p95)\n")
+    md.append("- **Investigate:** Landing Page Submission (Qualifizierung/Offer), API Leads (separates Handling), Chat (Experiment)\n")
+    md.append("- **Stop:** Motivation-Narratives als Budget-Hebel, Sales-Zeit für Bottom-Score Segmente\n\n")
+
+    out_path = results_dir / "executive_summary.md"
+    text = "".join(md)
+    out_path.write_text(text, encoding="utf-8")
+    return out_path, text
+
+
 def build_report(
     *,
     project_root: Path,
@@ -231,6 +440,7 @@ def build_report(
 ) -> Tuple[Path, Path]:
     """
     Loads known artifacts from results/tables, writes a Markdown report and (optional) figures.
+    Also generates a 1-page executive summary (results/executive_summary.md).
     """
     results_dir = project_root / "results"
     tables_dir = project_root / cfg.paths.tables_dir
@@ -250,6 +460,7 @@ def build_report(
 
     compare = _try_read_csv(tables_dir / "compare_structural_vs_predictive.csv")
     segment_profiles = _try_read_csv(tables_dir / "segment_profiles.csv")
+    segment_playbook = _try_read_csv(tables_dir / "segment_playbook.csv")
     under_table = _try_read_csv(tables_dir / "underestimated_features.csv")
 
     # ---- figures ----
@@ -282,10 +493,29 @@ def build_report(
     auc_struct = summary.get("auc_struct")
     auc_pred = summary.get("auc_pred")
 
+    # ---- Executive Summary (auto) ----
+    exec_path, exec_text = build_executive_summary(
+        project_root=project_root,
+        cfg=cfg,
+        summary=summary,
+        evidence_struct=evidence_struct,
+        effects_struct=effects_struct,
+        compare=compare,
+        under_table=under_table,
+        segment_playbook=segment_playbook,
+        segment_profiles=segment_profiles,
+    )
+
     report_path = results_dir / "report.md"
 
     md: list[str] = []
     md.append("# Lead Scoring Case – Explainability Report\n\n")
+
+    # Embed executive summary at the top (optional but recommended)
+    md.append("## Executive Summary (auto-generated)\n\n")
+    md.append(f"> Export: `{exec_path.relative_to(project_root).as_posix()}`\n\n")
+    # Keep it readable by embedding the content below; comment out if you prefer separate file only.
+    md.append(exec_text + "\n\n---\n\n")
 
     md.append("## Ziel\n")
     md.append("- **Welche Merkmale erklären Conversion wirklich?** (strukturell, robust, signifikant)\n")
@@ -315,15 +545,14 @@ def build_report(
         md.append(_md_table(evidence_struct, 25))
     else:
         md.append("_(Keine evidence_structural Tabelle gefunden)_\n\n")
-        
-    
+
     md.append("## 3b) Predictive Effects (Gate 2)\n\n")
     if effects_pred is not None and not effects_pred.empty:
         md.append("**Top Predictive-Effekte (Gate 2):**\n\n")
         md.append(_md_table(effects_pred, 20))
     else:
         md.append("_(Keine effects_predictive Tabelle gefunden)_\n\n")
-    
+        
 
     md.append("## 3) Predictive Evidence (nur zur Einordnung)\n\n")
     if evidence_pred is not None:
@@ -372,6 +601,7 @@ def build_report(
     md.append("- Tabellen: `results/tables/`\n")
     md.append("- Grafiken: `results/figures/`\n")
     md.append("- Report: `results/report.md`\n")
+    md.append("- Executive Summary: `results/executive_summary.md`\n")
 
     report_path.write_text("".join(md), encoding="utf-8")
     return report_path, figures_dir

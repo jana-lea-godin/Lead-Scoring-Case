@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pandas as pd
+
 from .config import LeadScoringCaseConfig
 from .data_loader import LeadDataLoader
 from .multivariate_explainer import (
@@ -212,11 +214,21 @@ def run() -> None:
     print("\nWROTE COMPARISON TABLE")
     print(" -", compare_path)
 
-    # ---- sanitize types for filtering ----
-    sig_struct = compare.get("sig_struct", False).fillna(False).infer_objects(copy=False).astype(bool)
-    sig_pred = compare.get("sig_pred", False).fillna(False).infer_objects(copy=False).astype(bool)
-    overestimated = compare.get("overestimated", False).fillna(False).infer_objects(copy=False).astype(bool)
-    dec_pred = compare.get("dec_pred", "").fillna("").astype(str)
+    # ---- sanitize types for filtering (avoid pandas future downcasting warning) ----
+    sig_struct = compare.get("sig_struct", pd.Series(False, index=compare.index))
+    sig_struct = pd.to_numeric(sig_struct, errors="coerce")
+    sig_struct = sig_struct.where(sig_struct.notna(), False).astype(bool)
+
+    sig_pred = compare.get("sig_pred", pd.Series(False, index=compare.index))
+    sig_pred = pd.to_numeric(sig_pred, errors="coerce")
+    sig_pred = sig_pred.where(sig_pred.notna(), False).astype(bool)
+
+    overestimated = compare.get("overestimated", pd.Series(False, index=compare.index))
+    overestimated = pd.to_numeric(overestimated, errors="coerce")
+    overestimated = overestimated.where(overestimated.notna(), False).astype(bool)
+
+    dec_pred = compare.get("dec_pred", pd.Series("", index=compare.index))
+    dec_pred = dec_pred.astype("string").fillna("").astype(str)
 
     print("\n" + "=" * 100)
     print("TOP OVER-ESTIMATED FEATURES (Predictive >> Structural)")
@@ -314,10 +326,16 @@ def run() -> None:
         },
     )
 
+    exec_summary_path = root / cfg.paths.results_dir / "executive_summary.md"
+
     print("\n" + "=" * 100)
     print("REPORT WRITTEN")
     print("=" * 100)
     print(" -", report_path)
+    if exec_summary_path.exists():
+        print(" - executive summary:", exec_summary_path)
+    else:
+        print(" - executive summary: (not found) expected at", exec_summary_path)
     print(" - figures:", figs_dir)
 
     # ----------------------------
